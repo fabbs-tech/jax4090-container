@@ -17,7 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.12 python3.12-dev python3.12-venv \
         git curl \
+        libatomic1 \
     && rm -rf /var/lib/apt/lists/*
+
+# libatomic1 above: pyright downloads its own Node binary on first run
+# (via pyright-python/nodeenv), and that binary links libatomic.so.1.
+# The cuda-runtime base image doesn't ship it, so pyright crashed with
+# "error while loading shared libraries: libatomic.so.1" until added.
 
 # Make Python 3.12 the default `python` and `python3`
 RUN update-alternatives --install /usr/bin/python  python  /usr/bin/python3.12 1 \
