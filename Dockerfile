@@ -47,4 +47,24 @@ RUN python -m pip install --upgrade pip \
         nbstripout \
         ipykernel
 
+# Non-root user for devcontainer + CI. Default UID/GID 1000 match the
+# typical Linux developer account; VS Code's updateRemoteUserUID remaps
+# them at container-start time to the actual host UID, so files written
+# into the bind-mounted /workspace (especially /workspace/.git) keep
+# host ownership. Without this, a commit done from inside the container
+# leaves .git/ subtrees root-owned on the host — see
+# tooling/dev_notes/log/python_jax_phase3_bringup.md trailing note.
+#
+# The USER directive is deliberately NOT set here: the image still
+# defaults to root so ad-hoc `docker run` keeps working, and CI's
+# `docker run --user 1000:1000` / devcontainer's `remoteUser` selects
+# the dev user explicitly. /usr/local/{lib/python3.12,bin} are chowned
+# so the dev user can `pip install` project deps at runtime.
+ARG DEV_USER=dev
+ARG DEV_UID=1000
+ARG DEV_GID=1000
+RUN groupadd --gid ${DEV_GID} ${DEV_USER} \
+ && useradd --uid ${DEV_UID} --gid ${DEV_GID} --create-home --shell /bin/bash ${DEV_USER} \
+ && chown -R ${DEV_USER}:${DEV_USER} /usr/local/lib/python3.12 /usr/local/bin
+
 WORKDIR /workspace
