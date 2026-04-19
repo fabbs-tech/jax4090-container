@@ -1,0 +1,31 @@
+name: Cleanup old container versions
+
+# ghcr.io has no declarative retention policy, so every push to `main`
+# that rebuilds `:latest` leaves the previous version as an untagged
+# orphan. This workflow prunes them weekly. Tagged versions (manual
+# workflow_dispatch tags like `jax0.4.38-cuda12.6`) are kept forever.
+
+on:
+  schedule:
+    # Sunday 03:00 UTC — quiet for the team, not clashing with builds.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  prune-untagged:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete untagged container versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: jax4090-container
+          package-type: container
+          owner: fabbs-tech
+          # Only prune orphaned layers — never touch a tagged version.
+          delete-only-untagged-versions: true
+          # Safety buffer: even among untagged, retain the most recent
+          # few in case a rollback is needed.
+          min-versions-to-keep: 3
