@@ -41,11 +41,21 @@ RUN curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
 RUN python -m pip install --upgrade pip \
  && python -m pip install \
         "jax[cuda12]" \
+        jaxtyping \
+        beartype \
         ruff \
         pyright \
         pytest \
         nbstripout \
         ipykernel
+
+# jaxtyping + beartype: shape/dtype annotations and the runtime
+# typechecker we pair with them. Convention (see
+# tooling/methods/python_jax/README.md §"Array typing"): annotate with
+# jaxtyping everywhere in compute/, wrap public entry points with
+# @jaxtyped(typechecker=beartype) for runtime enforcement. Baked into
+# the image because they're required by every python_jax project, same
+# reasoning as jax/ruff/pyright above.
 
 # Non-root user for devcontainer + CI. Default UID/GID 1000 match the
 # typical Linux developer account; VS Code's updateRemoteUserUID remaps
