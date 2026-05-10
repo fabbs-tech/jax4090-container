@@ -16,9 +16,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.12 python3.12-dev python3.12-venv \
-        git curl \
+        git curl openssh-client \
         libatomic1 \
     && rm -rf /var/lib/apt/lists/*
+
+# openssh-client: needed so interactive `git push` works from inside the
+# container against SCP-form remotes (git@github.com:org/repo.git). The
+# build-time foundation-library install path uses the
+# url."https://...".insteadOf "ssh://git@github.com/" rewrite with
+# FOUNDATION_TOKEN, but that PAT is read-scoped and the rewrite doesn't
+# match SCP-shorthand origins anyway. Push is expected to use the host's
+# SSH agent, forwarded into the container via $SSH_AUTH_SOCK in the
+# consumer repo's devcontainer.json. Distinct from the RunPod variant's
+# openssh-server (see README §"RunPod variant").
 
 # libatomic1 above: pyright downloads its own Node binary on first run
 # (via pyright-python/nodeenv), and that binary links libatomic.so.1.
