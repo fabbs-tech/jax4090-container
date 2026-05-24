@@ -49,11 +49,23 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # provenance:false / sbom:false: by default buildx wraps each tag
+      # in an OCI image index that references a platform manifest *and*
+      # an attestation manifest (os/arch unknown/unknown). GHCR exposes
+      # the index as "tagged" but the referenced manifests appear as
+      # untagged package versions — and the cleanup workflow's
+      # delete-package-versions@v5 is not reference-aware, so it prunes
+      # them as orphans and the next pull of :latest fails with
+      # `manifest unknown`. Disabling both flattens each tag to a single
+      # platform manifest, making the existing cleanup safe. See
+      # tooling/dev_notes/log/ghcr_manifest_unknown_oci_index_cleanup.md.
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
