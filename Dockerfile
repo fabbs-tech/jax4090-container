@@ -121,6 +121,25 @@ RUN python -m pip install --upgrade pip \
 #                                pip transaction with EACCES even
 #                                though the Python files would install
 #                                fine)
+#   /usr/local/etc             — the OTHER wheel data-file destination,
+#                                and the sibling `share` was missing for
+#                                the same reason: `widgetsnbextension`
+#                                (pulled in by `ipywidgets`) ships
+#                                etc/jupyter/nbconfig/notebook.d/*.json,
+#                                so a consumer whose requirements.txt
+#                                names ipywidgets died with
+#                                "Permission denied: '/usr/local/etc/
+#                                jupyter'" at the very end of an
+#                                otherwise complete install. Created
+#                                first: the dir exists in this base
+#                                image, but do not rely on that.
+#   /usr/local/include         — headers, the third data-file
+#                                destination (`<prefix>/include/
+#                                python3.12/<pkg>`). Nothing in the
+#                                current fleet installs one, but it is
+#                                the last of the three sibling dirs a
+#                                wheel can write to, and leaving it out
+#                                only buys the next EACCES.
 #   /usr/lib/python3/dist-packages — Debian's cross-version dist-packages
 #                                dir. pip for 3.12 sees it on sys.path
 #                                and tries to uninstall older copies of
@@ -139,10 +158,13 @@ ARG DEV_UID=1000
 ARG DEV_GID=1000
 RUN groupadd --gid ${DEV_GID} ${DEV_USER} \
  && useradd --uid ${DEV_UID} --gid ${DEV_GID} --create-home --shell /bin/bash ${DEV_USER} \
+ && install -d /usr/local/etc /usr/local/include \
  && chown -R ${DEV_USER}:${DEV_USER} \
         /usr/local/lib/python3.12 \
         /usr/local/bin \
         /usr/local/share \
+        /usr/local/etc \
+        /usr/local/include \
         /usr/lib/python3/dist-packages
 
 WORKDIR /workspace
