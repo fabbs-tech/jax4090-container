@@ -1,0 +1,92 @@
+# syntax=docker/dockerfile:1.7
+#
+# jax4090-runtime: the lean, public JAX image that cloud GPU jobs run in
+# (compute_broker rents a machine at RunPod / Vast / Lambda / Verda, the
+# provider pulls this image fresh, and the pull time is billed). It holds
+# only what every job needs: Python 3.12, JAX with CUDA 12, the array
+# typing pair, numpy/scipy, and the few binaries the broker's boot script
+# calls. The job's own code (a git archive of the repo commit) and its
+# inputs come with the job, never in this image. No secrets, no company
+# code: the package is public on GHCR.
+#
+# The dev image (`Dockerfile`) is built FROM this one, so a local run and
+# a cloud run use the same Python, JAX, jaxlib and CUDA wheels.
+
+# Base: the official Debian slim Python image, not nvidia/cuda. JAX's
+# `cuda12` extra pulls the CUDA runtime, cuBLAS, cuDNN, cuFFT, cuSOLVER,
+# cuSPARSE, NCCL and ptxas/nvJitLink as pip wheels, and jaxlib loads them
+# from site-packages. A CUDA base image would be a second, unused copy of
+# the same libraries (that was ~3 GB of the old 31 GB dev image). The
+# only CUDA piece not in the wheels is the driver (libcuda.so,
+# nvidia-smi), and that must come from the host anyway: the NVIDIA
+# container runtime mounts it in at `docker run --gpus` time.
+# Python is built under /usr/local; there is no Debian python3 in the
+# image, so `python`, `python3` and `pip` all mean 3.12.
+ARG PYTHON_IMAGE=python:3.12-slim-trixie
+FROM ${PYTHON_IMAGE}
+
+# Versions. JAX is pinned exactly (and stamped in a label) because the
+# jaxlib/plugin/CUDA-wheel set follows from it; the nvidia-* wheels are
+# resolved inside the ranges jax-cuda12-plugin declares. The small
+# libraries are pinned too, so a rebuild without a version change is the
+# same image. Bump on purpose, together, and stamp a tag (README).
+ARG JAX_VERSION=0.12.0.1
+ARG JAXTYPING_VERSION=0.3.11
+ARG BEARTYPE_VERSION=0.23.1
+ARG NUMPY_VERSION=2.5.4
+ARG SCIPY_VERSION=1.18.1
+
+LABEL org.opencontainers.image.source="https://github.com/fabbs-tech/jax4090-container" \
+      org.opencontainers.image.description="Lean JAX (CUDA 12 via pip wheels) runtime on Python 3.12 for cloud GPU jobs" \
+      org.opencontainers.image.title="jax4090-runtime" \
+      nl.fabbs.jax.version="${JAX_VERSION}" \
+      nl.fabbs.jax.cuda="cuda12-pip"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    # Ask the NVIDIA container runtime for the compute libraries
+    # (libcuda, libnvidia-ptxjitcompiler, ...) and nvidia-smi. `--gpus`
+    # sets these itself; providers that start containers through the
+    # legacy `nvidia` runtime read them from the image, as they do for
+    # the nvidia/cuda images.
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# What compute_broker's boot script (runner/boot.py) needs inside a
+# container: `sh` (dash), `tar` + `gzip` (inputs/outputs .tar.gz),
+# `timeout` (coreutils: the run-time cap), `ca-certificates` (HTTPS to the
+# object store). All of those are already in the slim base. `curl` is the
+# preferred HTTP client for the presigned GET/PUTs (python3 urllib is the
+# fallback) and is the one thing added. Kept explicit in the list anyway,
+# so a base-image change cannot drop one silently.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates curl tar gzip coreutils \
+ && rm -rf /var/lib/apt/lists/*
+
+# The Python stack, one layer, no pip cache. Only what (nearly) every job
+# imports:
+#   jax[cuda12]   JAX + jaxlib + the CUDA 12 plugin and its CUDA wheels.
+#   jaxtyping     shape/dtype annotations used across compute/ code ...
+#   beartype      ... and the runtime checker behind @jaxtyped
+#                 (tooling/methods/python_jax/README.md "Array typing").
+#   numpy, scipy  already hard dependencies of jax; named here only to
+#                 pin them (host-side array I/O, scipy.optimize /
+#                 scipy.stats / scipy.linalg reference checks).
+# Deliberately not here: optax, equinox, diffrax, polars, h5py, plotting,
+# notebooks, test and lint tools. They are job- or repo-specific; a job
+# that needs one installs it at start (or the dev image has it). Every
+# MB here is downloaded on every rented machine.
+RUN python -m pip install --no-cache-dir \
+        "jax[cuda12]==${JAX_VERSION}" \
+        "jaxtyping==${JAXTYPING_VERSION}" \
+        "beartype==${BEARTYPE_VERSION}" \
+        "numpy==${NUMPY_VERSION}" \
+        "scipy==${SCIPY_VERSION}"
+
+# Runs as root: the providers start the container as root with
+# `/bin/sh -c <bootstrap>` (RunPod, Vast) or `docker run <image> timeout
+# ... <cmd>` (Lambda, Verda). No ENTRYPOINT, so both forms reach the
+# command unchanged; the base image's CMD (python3) is the default.

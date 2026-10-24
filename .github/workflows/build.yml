@@ -1,15 +1,26 @@
-name: Build and Push JAX Container
+name: Build and Push JAX Containers
+
+# Two images, built in order in one job:
+#   1. ghcr.io/fabbs-tech/jax4090-runtime   (Dockerfile.runtime) — lean,
+#      public, what cloud GPU jobs run in.
+#   2. ghcr.io/fabbs-tech/jax4090-container (Dockerfile) — the dev/CI
+#      image, FROM the runtime image just pushed (pinned by digest, so
+#      the dev image is built on exactly that runtime, not on whatever
+#      :latest resolves to at that moment).
+# A change to either Dockerfile rebuilds both; an unchanged runtime is a
+# full cache hit and re-pushes the same digest.
 
 on:
   push:
     branches: [main]
     paths:
       - "Dockerfile"
+      - "Dockerfile.runtime"
       - ".github/workflows/build.yml"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Extra tag for this build (e.g. jax0.4.38-cuda12.6)"
+        description: "Extra tag for both images (e.g. jax0.12.0.1-cuda12)"
         required: false
         default: ""
 
@@ -17,12 +28,24 @@ permissions:
   contents: read
   packages: write
 
+env:
+  RUNTIME_IMAGE: ghcr.io/fabbs-tech/jax4090-runtime
+  DEV_IMAGE: ghcr.io/fabbs-tech/jax4090-container
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The runner's disk is small next to a 6 GB image plus its build
+      # cache; drop preinstalled toolchains we do not use.
+      - name: Free disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -38,14 +61,20 @@ jobs:
         id: tags
         shell: bash
         run: |
-          tags="ghcr.io/fabbs-tech/jax4090-container:latest"
+          rt="$RUNTIME_IMAGE:latest"
+          dev="$DEV_IMAGE:latest"
           if [ -n "${{ inputs.tag }}" ]; then
-            tags="$tags
-          ghcr.io/fabbs-tech/jax4090-container:${{ inputs.tag }}"
+            rt="$rt
+          $RUNTIME_IMAGE:${{ inputs.tag }}"
+            dev="$dev
+          $DEV_IMAGE:${{ inputs.tag }}"
           fi
           {
-            echo "tags<<EOF"
-            echo "$tags"
+            echo "runtime<<EOF"
+            echo "$rt"
+            echo "EOF"
+            echo "dev<<EOF"
+            echo "$dev"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -59,13 +88,29 @@ jobs:
       # `manifest unknown`. Disabling both flattens each tag to a single
       # platform manifest, making the existing cleanup safe. See
       # tooling/dev_notes/log/ghcr_manifest_unknown_oci_index_cleanup.md.
-      - name: Build and push
+      - name: Build and push runtime image
+        id: runtime
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: Dockerfile.runtime
           push: true
           provenance: false
           sbom: false
-          tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.runtime }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Build and push dev image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          provenance: false
+          sbom: false
+          build-args: |
+            BASE_IMAGE=${{ env.RUNTIME_IMAGE }}@${{ steps.runtime.outputs.digest }}
+          tags: ${{ steps.tags.outputs.dev }}
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,mode=max,scope=dev
